@@ -1,24 +1,25 @@
 import random
 import tkinter as tk
 
+# ======================================
+# 1. Board
+# ======================================
+
+
 class Board:
     def __init__(self):
         self._cells = [" "] * 9
 
-    def available_position(self):
+    def get_cells(self):
+        return self._cells.copy()
+
+    def available_positions(self):
         return [i for i, cell in enumerate(self._cells) if cell == " "]
 
-    def display(self):
-        for i in range(0, 9, 3):
-            print(" | ".join(self._cells[i : i + 3]))
-            if i < 6:
-                print("--+---+--")
-
     def place(self, position, symbol):
-        if position < 0 or position > 8:
+        if position not in self.available_positions():
             return False
-        if self._cells[position] != " ":
-            return False
+
         self._cells[position] = symbol
         return True
 
@@ -33,6 +34,7 @@ class Board:
             (0, 4, 8),
             (2, 4, 6),
         ]
+
         for a, b, c in patterns:
             if (
                 self._cells[a] != " "
@@ -40,10 +42,16 @@ class Board:
                 and self._cells[b] == self._cells[c]
             ):
                 return self._cells[a]
+
         return None
 
     def is_full(self):
-        return " " not in self._cells
+        return len(self.available_positions()) == 0
+
+
+# ======================================
+# 2. Player (Parent Class)
+# ======================================
 
 
 class Player:
@@ -51,115 +59,217 @@ class Player:
         self.name = name
         self.symbol = symbol
 
-    def choose_position(self, board):
-        return None
+    def choose_position(self, board, position=None):
+        return position
+
+
+# ======================================
+# 3. HumanPlayer
+# ======================================
 
 
 class HumanPlayer(Player):
-    def choose_position(self, board):
-        position = int(input("Position 1-9: "))
-        return position - 1
+    def choose_position(self, board, position=None):
+        return position
+
+
+# ======================================
+# 4. AIPlayer
+# ======================================
 
 
 class AIPlayer(Player):
-    def choose_position(self, board):
-        available = board.available_position()
+    def choose_position(self, board, position=None):
+        available = board.available_positions()
+
+        if not available:
+            return None
+
         return random.choice(available)
 
 
+# ======================================
+# 5. TicTacToeGame
+# ======================================
+
+
 class TicTacToeGame:
-    def __init__(self, player1, player2):
+    def __init__(self):
         self.board = Board()
+
+        self.players = [HumanPlayer("You", "X"), AIPlayer("Computer", "O")]
+
+        self.current_player = 0
         self.winner = None
         self.game_over = False
-        self.players = [
-            player1,
-            player2,
-        ]
-        self.current_player = 0
+
+    def switch_player(self):
+        self.current_player = 1 - self.current_player
+
     def play_turn(self, position=None):
         if self.game_over:
             return False
+
         player = self.players[self.current_player]
-        chosen = player.choose_position(self.board, position)
-        if not self.board.place(chosen, position, player.symbol):
+
+        chosen_position = player.choose_position(self.board, position)
+
+        if not self.board.place(chosen_position, player.symbol):
             return False
-        winner = self.board.check_winner()
-        if winner:
+
+        winner_symbol = self.board.check_winner()
+
+        if winner_symbol:
             self.winner = player
             self.game_over = True
-            return True
-        if self.board.is_full():
-            self.game_over = True
-            return True
-        self.current_player = 1 - self.current_player
-        return True
-    # def switch_player(self):
-    #     self.current_player = 1 - self.current_player
 
-    # def play(self):
-    #     while True:
-    #         self.board.display()
-    #         player = self.players[self.current_player]
-    #         print(f"\n{player.name}'s turn ({player.symbol})")
-    #         try:
-    #             position = player.choose_position(self.board)
-    #         except ValueError:
-    #             print("Please enter a valid number!")
-    #             continue
-    #         if not self.board.place(position, player.symbol):
-    #             print("Invalid position!")
-    #             continue
-    #         winner = self.board.check_winner()
-    #         if winner:
-    #             self.board.display()
-    #             print(f"\n{player.name} wins!")
-    #             break
-    #         if self.board.is_full():
-    #             self.board.display()
-    #             print("\nIt's a draw!")
-    #             break
-    #         self.switch_player()
+        elif self.board.is_full():
+            self.game_over = True
+
+        else:
+            self.switch_player()
+
+        return True
+
+
+# ======================================
+# 6. TicTacToeGUI
+# ======================================
 
 
 class TicTacToeGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Tic Tac Toe")
-        self.game = TicTacToeGame(player1=HumanPlayer("Alice", "X"), player2=AIPlayer("Bob", "O"))
+        self.root.title("Tic Tac Toe - OOP")
+        self.root.resizable(False, False)
+
+        self.game = TicTacToeGame()
         self.buttons = []
         self.ai_job = None
-        title = tk.Label(root, text="Tic Tac Toe", font=("Helvetica", 16))
-        title.pack(pady=10)
-        frame = tk.Frame(root)
-        frame.pack(padx=20, pady=10)
+
+        # Title
+        self.title_label = tk.Label(
+            root, text="Tic Tac Toe", font=("Arial", 24, "bold")
+        )
+        self.title_label.pack(pady=15)
+
+        # Board Frame
+        self.board_frame = tk.Frame(root)
+        self.board_frame.pack(padx=20, pady=10)
+
+        # Create 3x3 Buttons
         for i in range(9):
             button = tk.Button(
-                frame,
+                self.board_frame,
                 text=" ",
-                font=("Helvetica", 20),
+                font=("Arial", 24, "bold"),
                 width=5,
                 height=2,
-                # command=lambda i=i: self.human_move(i),
+                command=lambda pos=i: self.on_click(pos),
             )
-            button.grid(row=i // 3, column=i % 3, padx=2, pady=2)
+
+            button.grid(row=i // 3, column=i % 3, padx=3, pady=3)
+
             self.buttons.append(button)
-        self.status_label = tk.Label(root, text="Your turn (X)", font=("Helvetica", 14))
+
+        # Status Label
+        self.status_label = tk.Label(root, text="Your turn (X)", font=("Arial", 14))
         self.status_label.pack(pady=10)
-        restart_button = tk.Button(root, text="Restart", command=self.restart_game)
-        restart_button.pack(pady=10)
-    def restart_game(self):
-        if self.ai_job is not None:
-            self.root.after_cancel(self.ai_job)
-            self.ai_job = None
-        self.game = TicTacToeGame()
+
+        # Restart Button
+        self.restart_button = tk.Button(
+            root, text="New Game", font=("Arial", 12), command=self.restart
+        )
+        self.restart_button.pack(pady=10)
+
         self.update_ui()
+
+    # Handle Human Click
     def on_click(self, position):
+        if self.game.game_over:
+            return
+
         if self.game.current_player != 0:
             return
 
-root = tk.Tk()
-gui = TicTacToeGUI(root)
-root.mainloop()
-# game = TicTacToeGame(HumanPlayer("Alice", "X"), AIPlayer("Bob", "O"))
-# game.play()
+        success = self.game.play_turn(position)
+
+        if not success:
+            return
+
+        self.update_ui()
+
+        # AI Turn
+        if not self.game.game_over:
+            self.ai_job = self.root.after(500, self.ai_turn)
+
+    # AI plays automatically
+    def ai_turn(self):
+        self.ai_job = None
+
+        if self.game.game_over:
+            return
+
+        if self.game.current_player != 1:
+            return
+
+        self.game.play_turn()
+        self.update_ui()
+
+    # Update GUI
+    def update_ui(self):
+        cells = self.game.board.get_cells()
+
+        for i, button in enumerate(self.buttons):
+            symbol = cells[i]
+
+            if symbol == "X":
+                color = "blue"
+            elif symbol == "O":
+                color = "red"
+            else:
+                color = "black"
+
+            can_click = (
+                not self.game.game_over
+                and self.game.current_player == 0
+                and symbol == " "
+            )
+
+            button.config(
+                text=symbol,
+                fg=color,
+                disabledforeground=color,
+                state="normal" if can_click else "disabled",
+            )
+
+        if self.game.winner:
+            message = f"{self.game.winner.name} wins!"
+
+        elif self.game.game_over:
+            message = "It's a draw!"
+
+        else:
+            player = self.game.players[self.game.current_player]
+            message = f"{player.name}'s turn ({player.symbol})"
+
+        self.status_label.config(text=message)
+
+    # Restart Game
+    def restart(self):
+        if self.ai_job is not None:
+            self.root.after_cancel(self.ai_job)
+            self.ai_job = None
+
+        self.game = TicTacToeGame()
+        self.update_ui()
+
+
+# ======================================
+# 7. Main
+# ======================================
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TicTacToeGUI(root)
+    root.mainloop()
