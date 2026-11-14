@@ -1,275 +1,139 @@
-import random
+"""Tkinter client for the multiplayer Tic Tac Toe server."""
+
+import json
+import queue
+import socket
+import threading
 import tkinter as tk
+from tkinter import messagebox, simpledialog
 
-# ======================================
-# 1. Board
-# ======================================
-
-
-class Board:
-    def __init__(self):
-        self._cells = [" "] * 9
-
-    def get_cells(self):
-        return self._cells.copy()
-
-    def available_positions(self):
-        return [i for i, cell in enumerate(self._cells) if cell == " "]
-
-    def place(self, position, symbol):
-        if position not in self.available_positions():
-            return False
-
-        self._cells[position] = symbol
-        return True
-
-    def check_winner(self):
-        patterns = [
-            (0, 1, 2),
-            (3, 4, 5),
-            (6, 7, 8),
-            (0, 3, 6),
-            (1, 4, 7),
-            (2, 5, 8),
-            (0, 4, 8),
-            (2, 4, 6),
-        ]
-
-        for a, b, c in patterns:
-            if (
-                self._cells[a] != " "
-                and self._cells[a] == self._cells[b]
-                and self._cells[b] == self._cells[c]
-            ):
-                return self._cells[a]
-
-        return None
-
-    def is_full(self):
-        return len(self.available_positions()) == 0
+PORT = 5000
 
 
-# ======================================
-# 2. Player (Parent Class)
-# ======================================
-
-
-class Player:
-    def __init__(self, name, symbol):
-        self.name = name
-        self.symbol = symbol
-
-    def choose_position(self, board, position=None):
-        return position
-
-
-# ======================================
-# 3. HumanPlayer
-# ======================================
-
-
-class HumanPlayer(Player):
-    def choose_position(self, board, position=None):
-        return position
-
-
-# ======================================
-# 4. AIPlayer
-# ======================================
-
-
-class AIPlayer(Player):
-    def choose_position(self, board, position=None):
-        available = board.available_positions()
-
-        if not available:
-            return None
-
-        return random.choice(available)
-
-
-# ======================================
-# 5. TicTacToeGame
-# ======================================
-
-
-class TicTacToeGame:
-    def __init__(self):
-        self.board = Board()
-
-        self.players = [HumanPlayer("You", "X"), AIPlayer("Computer", "O")]
-
-        self.current_player = 0
-        self.winner = None
-        self.game_over = False
-
-    def switch_player(self):
-        self.current_player = 1 - self.current_player
-
-    def play_turn(self, position=None):
-        if self.game_over:
-            return False
-
-        player = self.players[self.current_player]
-
-        chosen_position = player.choose_position(self.board, position)
-
-        if not self.board.place(chosen_position, player.symbol):
-            return False
-
-        winner_symbol = self.board.check_winner()
-
-        if winner_symbol:
-            self.winner = player
-            self.game_over = True
-
-        elif self.board.is_full():
-            self.game_over = True
-
-        else:
-            self.switch_player()
-
-        return True
-
-
-# ======================================
-# 6. TicTacToeGUI
-# ======================================
-
-
-class TicTacToeGUI:
-    def __init__(self, root):
+class TicTacToeClient:
+    def __init__(self, root, host, name):
         self.root = root
-        self.root.title("Tic Tac Toe - OOP")
+        self.root.title("Tic Tac Toe Online")
         self.root.resizable(False, False)
+        self.host = host
+        self.name = name
+        self.sock = None
+        self.player = None
+        self.symbol = None
+        self.state = None
+        self.incoming = queue.Queue()
 
-        self.game = TicTacToeGame()
-        self.buttons = []
-        self.ai_job = None
-
-        # Title
-        self.title_label = tk.Label(
-            root, text="Tic Tac Toe", font=("Arial", 24, "bold")
-        )
-        self.title_label.pack(pady=15)
-
-        # Board Frame
+        tk.Label(root, text="Tic Tac Toe", font=("Arial", 24, "bold")).pack(pady=15)
         self.board_frame = tk.Frame(root)
         self.board_frame.pack(padx=20, pady=10)
-
-        # Create 3x3 Buttons
-        for i in range(9):
+        self.buttons = []
+        for position in range(9):
             button = tk.Button(
-                self.board_frame,
-                text=" ",
-                font=("Arial", 24, "bold"),
-                width=5,
-                height=2,
-                command=lambda pos=i: self.on_click(pos),
+                self.board_frame, text=" ", font=("Arial", 24, "bold"),
+                width=5, height=2, command=lambda p=position: self.play(p),
             )
-
-            button.grid(row=i // 3, column=i % 3, padx=3, pady=3)
-
+            button.grid(row=position // 3, column=position % 3, padx=3, pady=3)
             self.buttons.append(button)
 
-        # Status Label
-        self.status_label = tk.Label(root, text="Your turn (X)", font=("Arial", 14))
-        self.status_label.pack(pady=10)
+        self.status = tk.Label(root, text="Connecting...", font=("Arial", 14))
+        self.status.pack(pady=10)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.connect()
+        self.root.after(100, self.process_messages)
 
-        # Restart Button
-        self.restart_button = tk.Button(
-            root, text="New Game", font=("Arial", 12), command=self.restart
-        )
-        self.restart_button.pack(pady=10)
+    def connect(self):
+        try:
+            self.sock = socket.create_connection((self.host, PORT), timeout=8)
+            self.sock.settimeout(None)
+            self.send({"type": "join", "name": self.name})
+            threading.Thread(target=self.receive, daemon=True).start()
+        except OSError as error:
+            messagebox.showerror("Connection failed", f"Could not connect to {self.host}:{PORT}\n{error}")
+            self.root.destroy()
 
-        self.update_ui()
+    def send(self, message):
+        self.sock.sendall((json.dumps(message) + "\n").encode("utf-8"))
 
-    # Handle Human Click
-    def on_click(self, position):
-        if self.game.game_over:
-            return
+    def receive(self):
+        try:
+            stream = self.sock.makefile("r", encoding="utf-8")
+            for line in stream:
+                self.incoming.put(json.loads(line))
+        except (OSError, json.JSONDecodeError):
+            pass
+        self.incoming.put({"type": "disconnected"})
 
-        if self.game.current_player != 0:
-            return
+    def process_messages(self):
+        while True:
+            try:
+                message = self.incoming.get_nowait()
+            except queue.Empty:
+                break
+            if message["type"] == "welcome":
+                self.player = message["player"]
+                self.symbol = message["symbol"]
+            elif message["type"] == "state":
+                self.state = message
+                self.update_ui()
+            elif message["type"] == "error":
+                self.status.config(text=message["message"])
+            elif message["type"] == "disconnected":
+                if self.root.winfo_exists():
+                    self.status.config(text="Disconnected from server")
+                    for button in self.buttons:
+                        button.config(state="disabled")
+        if self.root.winfo_exists():
+            self.root.after(100, self.process_messages)
 
-        success = self.game.play_turn(position)
+    def play(self, position):
+        if self.state and not self.state["game_over"] and self.state["turn"] == self.player:
+            try:
+                self.send({"type": "move", "position": position})
+            except OSError:
+                self.status.config(text="Could not send move")
 
-        if not success:
-            return
-
-        self.update_ui()
-
-        # AI Turn
-        if not self.game.game_over:
-            self.ai_job = self.root.after(500, self.ai_turn)
-
-    # AI plays automatically
-    def ai_turn(self):
-        self.ai_job = None
-
-        if self.game.game_over:
-            return
-
-        if self.game.current_player != 1:
-            return
-
-        self.game.play_turn()
-        self.update_ui()
-
-    # Update GUI
     def update_ui(self):
-        cells = self.game.board.get_cells()
+        state = self.state
+        for position, button in enumerate(self.buttons):
+            cell = state["board"][position]
+            color = {"X": "blue", "O": "red", " ": "black"}[cell]
+            can_play = (not state["game_over"] and state["turn"] == self.player
+                        and cell == " ")
+            button.config(text=cell, fg=color, disabledforeground=color,
+                          state="normal" if can_play else "disabled")
 
-        for i, button in enumerate(self.buttons):
-            symbol = cells[i]
-
-            if symbol == "X":
-                color = "blue"
-            elif symbol == "O":
-                color = "red"
-            else:
-                color = "black"
-
-            can_click = (
-                not self.game.game_over
-                and self.game.current_player == 0
-                and symbol == " "
-            )
-
-            button.config(
-                text=symbol,
-                fg=color,
-                disabledforeground=color,
-                state="normal" if can_click else "disabled",
-            )
-
-        if self.game.winner:
-            message = f"{self.game.winner.name} wins!"
-
-        elif self.game.game_over:
-            message = "It's a draw!"
-
+        if state["winner"] is not None:
+            winner_name = state["names"][state["winner"]]
+            text = f"{winner_name} ({'XO'[state['winner']]}) wins!"
+        elif state["game_over"]:
+            text = "It's a draw!"
         else:
-            player = self.game.players[self.game.current_player]
-            message = f"{player.name}'s turn ({player.symbol})"
+            turn_name = state["names"][state["turn"]]
+            text = ("Your turn" if state["turn"] == self.player else f"{turn_name}'s turn")
+            text += f" ({'XO'[state['turn']]})"
+        self.status.config(text=text)
 
-        self.status_label.config(text=message)
-
-    # Restart Game
-    def restart(self):
-        if self.ai_job is not None:
-            self.root.after_cancel(self.ai_job)
-            self.ai_job = None
-
-        self.game = TicTacToeGame()
-        self.update_ui()
+    def close(self):
+        if self.sock:
+            self.sock.close()
+        self.root.destroy()
 
 
-# ======================================
-# 7. Main
-# ======================================
+def main():
+    root = tk.Tk()
+    root.withdraw()
+    host = simpledialog.askstring("Join game", "Server address:", initialvalue="127.0.0.1", parent=root)
+    if not host:
+        root.destroy()
+        return
+    name = simpledialog.askstring("Join game", "Your name:", initialvalue="Player", parent=root)
+    if not name:
+        root.destroy()
+        return
+    root.deiconify()
+    TicTacToeClient(root, host.strip(), name.strip())
+    root.mainloop()
+
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = TicTacToeGUI(root)
-    root.mainloop()
+    main()
